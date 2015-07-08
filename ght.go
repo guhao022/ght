@@ -6,6 +6,6 @@ import (
 )
 
 func main() {
-	paths := []string{"/data/go/src/golune"}
+	paths := []string{"/data/go/src/ght/mod"}
 	mod.Watch(paths)
 }

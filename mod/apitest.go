@@ -38,8 +38,29 @@ func recursivePath(recursive bool, paths []string) []string {
 	return ret
 }
 
-func Watch(paths []string){
+// 确定文件path是否属于被忽略的格式。
+func isIgnore(path string) bool {
+	var	appCmd *exec.Cmd // appName的命令行包装引用，方便结束其进程。
+	if appCmd != nil && appCmd.Path == path { // 忽略程序本身的监视
+		return true
+	}
 
+	for _, ext := range b.exts {
+		if len(ext) == 0 {
+			continue
+		}
+		if ext == "*" {
+			return false
+		}
+		if strings.HasSuffix(path, ext) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func Watch(paths []string){
 
 	//初始化监听器
 	watcher, err := fsnotify.NewWatcher()
@@ -56,12 +77,8 @@ func Watch(paths []string){
 			case event := <-watcher.Events:
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					utils.ColorLog("[INFO] 修改文件: %s \n", event.Name)
-
 				}
-				if event.Op&fsnotify.Chmod == fsnotify.Chmod {
-					utils.ColorLog("[TRAC] 忽略CHMOD事件:", event)
-					continue
-				}
+				utils.ColorLog("[INFO] [ %s ]文件被修改 \n", event.Name)
 			case err := <-watcher.Errors:
 				utils.ColorLog("[ERROR] %s \n", err)
 			}

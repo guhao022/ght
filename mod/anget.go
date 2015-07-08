@@ -13,6 +13,7 @@ import (
 
 var total = 1
 
+
 type Anget struct {
 	Dev    bool
 	Stable bool
