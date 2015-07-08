@@ -1,9 +1,11 @@
 package main
 
 import (
-	"ght/cmd"
+	//"ght/cmd"
+	"ght/mod"
 )
 
 func main() {
-	cmd.Anget()
+	paths := []string{"/data/go/src/golune"}
+	mod.Watch(paths)
 }

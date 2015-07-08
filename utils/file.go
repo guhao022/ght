@@ -1,15 +1,15 @@
 package utils
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 //递归创建文件
 func CreateFile(src string) (string, error) {
-	if FileExists(src) {
+	if isExist(src) {
 		return src, nil
 	}
 
@@ -23,14 +23,24 @@ func CreateFile(src string) (string, error) {
 	return src, nil
 }
 
-//文件是否存在
-func FileExists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
+// IsExist returns whether a file or directory exists.
+func isExist(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil || os.IsExist(err)
+}
+
+
+// GetGOPATHs returns all paths in GOPATH variable.
+func GetGOPATHs() []string {
+	gopath := os.Getenv("GOPATH")
+	var paths []string
+	if runtime.GOOS == "windows" {
+		gopath = strings.Replace(gopath, "\\", "/", -1)
+		paths = strings.Split(gopath, ";")
+	} else {
+		paths = strings.Split(gopath, ":")
 	}
-	return true
+	return paths
 }
 
 
