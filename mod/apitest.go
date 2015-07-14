@@ -9,49 +9,198 @@ import (
 	"strings"
 	"time"
 	"runtime"
+	"fmt"
+	"flag"
 )
 
 var watchExts = []string{".go", ".php"}
 
-var started = make(chan bool)
-
-
 var (
-	cmd          *exec.Cmd
 	eventTime    = make(map[string]int64)
 	scheduleTime time.Time
 )
 
-// 根据recursive值确定是否递归查找paths每个目录下的子目录。
-func recursivePath(recursive bool, paths []string) []string {
-	if !recursive {
-		return paths
-	}
 
-	ret := []string{}
+const usage = `
 
-	walk := func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			utils.ColorLog("[ERRO] [1]遍历监视目录错误: %s", err)
-		}
+ Options:
+  	-h    显示当前帮助信息；
+  	-o    执行编译后的可执行文件名；
+  	-r    是否搜索子目录，默认为true；
+`
+type watch struct {
 
-		//(BUG):不能监视隐藏目录下的文件
-		if fi.IsDir() && strings.Index(path, "/.") < 0 {
-			ret = append(ret, path)
-		}
-		return nil
-	}
+	//热编译相关
+	appName   string    // 输出的程序文件
+	appCmd    *exec.Cmd // appName的命令行包装引用，方便结束其进程。
+	goCmdArgs []string  // 传递给go build的参数
 
-	for _, path := range paths {
-		if err := filepath.Walk(path, walk); err != nil {
-			utils.ColorLog("[ERRO] [2]遍历监视目录错误: %s", err)
-		}
-	}
-
-	return ret
 }
 
-func checkIfWatchExt(name string) bool {
+func Run(){
+
+	// 初始化flag
+	var showHelp, recursive bool
+	var outputName string
+
+	flag.BoolVar(&showHelp, "h", false, "显示帮助信息")
+	flag.BoolVar(&recursive, "r", true, "是否查找子目录")
+	flag.StringVar(&outputName, "o", "", "指定输出名称")
+	flag.Usage = func() {
+		fmt.Println(usage)
+	}
+
+	flag.Parse()
+
+	if showHelp {
+		flag.Usage()
+		return
+	}
+
+	// 初始化builder实例想着的内容。
+
+	wd, err := os.Getwd()
+	if err != nil {
+		utils.ColorLog("[ERRO] 获取当前工作目录时，发生错误: [ %s ] \n", err)
+		return
+	}
+
+	// 初始化goCmd的参数
+	args := []string{"build", "-o", outputName}
+
+	w := &watch{
+		appName:   getAppName(outputName, wd),
+		goCmdArgs: args,
+	}
+
+	w.watcher(recursivePath(recursive, append(flag.Args(), wd)))
+
+	fmt.Println(w.appName)
+	go w.build()
+
+	done := make(chan bool)
+	<-done
+}
+
+func (w *watch) watcher(paths []string) {
+
+	utils.ColorLog("[TRAC] 初始化文件监视器... \n")
+	//初始化监听器
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		utils.ColorLog("[ERRO] 初始化监视器失败: [ %s ] \n", err)
+		os.Exit(2)
+	}
+
+	go func() {
+		var buildTime int64
+		for {
+			select {
+			case event := <-watcher.Events:
+				isbuild := false
+				if !w.checkIfWatchExt(event.Name) {
+					continue
+				}
+				if event.Op&fsnotify.Chmod == fsnotify.Chmod {
+					utils.ColorLog("[SKIP] # %s # \n", event)
+					continue
+				}
+
+				mt := w.getFileModTime(event.Name)
+				if t := eventTime[event.Name]; mt == t {
+					utils.ColorLog("[SKIP] # %s #\n", event.String())
+					continue
+				}
+
+				eventTime[event.Name] = mt
+
+				if(strings.HasSuffix(event.Name, ".go")){
+					isbuild = true
+				}
+
+				if isbuild {
+					go func() {
+						scheduleTime = time.Now().Add(1 * time.Second)
+						for {
+							time.Sleep(scheduleTime.Sub(time.Now()))
+							if time.Now().After(scheduleTime) {
+								break
+							}
+							return
+						}
+						buildTime = time.Now().Unix()
+						utils.ColorLog("[TRAC] 触发编译事件: # %s # \n", event)
+						w.build()
+					}()
+				}
+
+			case err := <-watcher.Errors:
+				utils.ColorLog("[ERRO] 监控失败 [ %s ] \n", err)
+			}
+		}
+	}()
+
+	for _, path := range paths {
+		utils.ColorLog("[TRAC] 监视文件夹: ( %s ) \n", path)
+		err = watcher.Add(path)
+		if err != nil {
+			utils.ColorLog("[ERRO] 监视文件夹失败: [ %s ] \n", err)
+			os.Exit(2)
+		}
+	}
+}
+
+// 开始编译代码
+func (w *watch) build() {
+	utils.ColorLog("[INFO] 编译代码... \n")
+
+	goCmd := exec.Command("go", w.goCmdArgs...)
+	goCmd.Stderr = os.Stderr
+	goCmd.Stdout = os.Stdout
+
+	if err := goCmd.Run(); err != nil {
+		utils.ColorLog("[ERRO] 编译失败: [ %s ] \n", err)
+		return
+	}
+
+	utils.ColorLog("[SUCC] 编译成功... \n")
+
+	w.restart()
+}
+
+func (w *watch) restart() {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("Kill.recover -> ", err)
+		}
+	}()
+
+	if w.appCmd != nil && w.appCmd.Process != nil {
+		utils.ColorLog("[INFO] 进程终止... \n")
+		if err := w.appCmd.Process.Kill(); err != nil {
+			utils.ColorLog("[ERROR] 终止进程失败 [ %s ] ...\n", err)
+		}
+		utils.ColorLog("[SUCC] 旧进程被终止! \n")
+	}
+
+	utils.ColorLog("[INFO] 重启 # %s # \n", w.appName)
+	if strings.Index(w.appName, "./") == -1 {
+		w.appName = "./" + w.appName
+	}
+
+	utils.ColorLog("[INFO] 启动新进程... \n")
+	w.appCmd = exec.Command(w.appName)
+	w.appCmd.Stderr = os.Stderr
+	w.appCmd.Stdout = os.Stdout
+	if err := w.appCmd.Start(); err != nil {
+		utils.ColorLog("[ERRO] 启动进程时出错: [ %s ] \n", err)
+	}
+
+	utils.ColorLog("[SUCC] 新进程已经启动...\n")
+}
+
+
+func (w *watch) checkIfWatchExt(name string) bool {
 	for _, s := range watchExts {
 		if strings.HasSuffix(name, s) {
 			return true
@@ -60,66 +209,19 @@ func checkIfWatchExt(name string) bool {
 	return false
 }
 
-func Watch(paths []string) {
-
-	//初始化监听器
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		utils.ColorLog("[ERRO] 初始化监视器失败:", err)
-		os.Exit(2)
-	}
-
-	defer watcher.Close()
-
-	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				if !checkIfWatchExt(event.Name) {
-					continue
-				}
-				mt := getFileModTime(event.Name)
-				if t := eventTime[event.Name]; mt == t {
-					continue
-				}
-
-				eventTime[event.Name] = mt
-				utils.ColorLog("[SUCC] [ %s ]文件被修改 \n", event.Name)
-
-				Qbuild()
-
-			case err := <-watcher.Errors:
-				utils.ColorLog("[ERRO] 监控失败 %s \n", err)
-			}
-		}
-	}()
-
-	utils.ColorLog("[INFO] 初始化文件监视器...\n")
-	for _, path := range paths {
-		utils.ColorLog("[SUCC] 监视文件夹: [%s] \n", path)
-		err = watcher.Add(path)
-		if err != nil {
-
-			utils.ColorLog("[ERRO] 监视文件夹失败: [%s] \n", err)
-			os.Exit(2)
-		}
-	}
-
-}
-
-func getFileModTime(path string) int64 {
+func (w *watch) getFileModTime(path string) int64 {
 	path = strings.Replace(path, "\\", "/", -1)
 	f, err := os.Open(path)
 	if err != nil {
 
-		utils.ColorLog("[ERRO] 文件打开失败--[ %s ]\n", err)
+		utils.ColorLog("[ERRO] 文件打开失败 [ %s ]\n", err)
 		return time.Now().Unix()
 	}
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		utils.ColorLog("[ERRO] 获取不到文件信息--[ %s ]\n", err)
+		utils.ColorLog("[ERRO] 获取不到文件信息 [ %s ]\n", err)
 		return time.Now().Unix()
 	}
 
@@ -134,133 +236,37 @@ func getAppName(outputName, wd string) string {
 		outputName += ".exe"
 	}
 	if strings.IndexByte(outputName, '/') < 0 || strings.IndexByte(outputName, filepath.Separator) < 0 {
-		outputName = /*wd + string(filepath.Separator) + */outputName
+		outputName = outputName
 	}
-
-	utils.ColorLog("[INFO] 输出文件为--[ %s ]\n", outputName)
 
 	return outputName
 }
 
-// 开始编译代码
-func Qbuild() {
-	utils.ColorLog("[INFO] 编译代码...")
-
-	goCmd := exec.Command("go", "build")
-	goCmd.Stderr = os.Stderr
-	goCmd.Stdout = os.Stdout
-	if err := goCmd.Run(); err != nil {
-		utils.ColorLog("[ERRO] 编译失败: %s", err)
-		return
+// 根据recursive值确定是否递归查找paths每个目录下的子目录。
+func recursivePath(recursive bool, paths []string) []string {
+	if !recursive {
+		return paths
 	}
 
-	utils.ColorLog("[SUCC] 编译成功...")
+	ret := []string{}
 
-	restart()
-}
-
-// 重启被编译的程序
-func restart() {
-	defer func() {
-		if err := recover(); err != nil {
-			utils.ColorLog("[ERRO] restart.defer: %s", err)
-		}
-	}()
-
-	var	appCmd *exec.Cmd
-	wd, err := os.Getwd()
-	if err != nil {
-		utils.ColorLog("[ERROR] 获取当前工作目录时，发生以下错误:", err)
-		return
-	}
-	appname := getAppName("", wd)
-	// kill process
-	if appCmd != nil && appCmd.Process != nil {
-		utils.ColorLog("[INFO] 中止旧进程...")
-		if err := appCmd.Process.Kill(); err != nil {
-			utils.ColorLog("[ERRO] kill err: %s", err)
-		}
-		utils.ColorLog("[SUCC] 旧进程被终止!")
-	}
-
-	utils.ColorLog("[INFO] 启动新进程...")
-
-	appCmd = exec.Command(appname)
-	appCmd.Stderr = os.Stderr
-	appCmd.Stdout = os.Stdout
-	if err := appCmd.Start(); err != nil {
-		utils.ColorLog("[ERRO] 启动进程时出错: %s", err)
-	}
-}
-
-
-// 编译代码
-func Build() {
-	utils.ColorLog("[INFO] 开始编译... \n")
-
-	goCmd := exec.Command("go", "build")
-	goCmd.Stderr = os.Stderr
-	goCmd.Stdout = os.Stdout
-	if err := goCmd.Run(); err != nil {
-		utils.ColorLog("[INFO] 编译失败: %s \n", err)
-		return
-	}
-
-	utils.ColorLog("[INFO] 编译成功... \n")
-	Restart()
-}
-
-/*func Kill() {
-	defer func() {
-		if e := recover(); e != nil {
-			fmt.Println("Kill.recover -> ", e)
-		}
-	}()
-	if cmd != nil && cmd.Process != nil {
-		err := cmd.Process.Kill()
+	walk := func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Println("Kill -> ", err)
+			utils.ColorLog("[ERRO] 遍历监视目录错误: [ %s ] \n", err)
+		}
+
+		//(BUG):不能监视隐藏目录下的文件
+		if fi.IsDir() && strings.Index(path, "/.") < 0 {
+			ret = append(ret, path)
+		}
+		return nil
+	}
+
+	for _, path := range paths {
+		if err := filepath.Walk(path, walk); err != nil {
+			utils.ColorLog("[ERRO] 遍历监视目录错误: [ %s ] \n", err)
 		}
 	}
-}*/
 
-func Restart() {
-	utils.ColorLog("[INFO] 终止程序... \n")
-	go Start()
-}
-
-func Start() {
-	var	appCmd *exec.Cmd
-	wd, err := os.Getwd()
-	if err != nil {
-		utils.ColorLog("[ERROR] 获取当前工作目录时，发生以下错误:", err)
-		return
-	}
-
-	appname := getAppName("", wd)
-	utils.ColorLog("[INFO] 重启 %s ...\n", appname)
-	if strings.Index(appname, "./") == -1 {
-		appname = "./" + appname
-	}
-
-	if appCmd != nil && appCmd.Process != nil {
-		utils.ColorLog("[INFO] 进程终止... \n")
-		if err := appCmd.Process.Kill(); err != nil {
-			utils.ColorLog("[ERROR] 终止进程失败 %s ...\n", err)
-		}
-		utils.ColorLog("[SUCC] 旧进程被终止! \n")
-	}
-
-	utils.ColorLog("[INFO] 启动新进程... \n")
-	appCmd = exec.Command(appname)
-	appCmd.Stderr = os.Stderr
-	appCmd.Stdout = os.Stdout
-	if err := appCmd.Start(); err != nil {
-		utils.ColorLog("[ERRO] 启动进程时出错: %s \n", err)
-	}
-
-
-	//go cmd.Run()
-	utils.ColorLog("[SUCC] 新进程已经启动...\n")
-	started <- true
+	return ret
 }

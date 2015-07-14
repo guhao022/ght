@@ -14,6 +14,8 @@ const (
 	Yellow
 	Blue
 	Magenta
+	Cyan
+	White
 	//NRed      = uint8(31) // Normal
 	EndColor = "\033[0m"
 
@@ -22,6 +24,7 @@ const (
 	ERRO = "ERRO"
 	WARN = "WARN"
 	SUCC = "SUCC"
+	SKIP = "SKIP"
 )
 
 // ColorLog colors log and print to stdout.
@@ -62,7 +65,7 @@ func colorLogS(format string, a ...interface{}) string {
 		log = strings.Replace(log, " )", EndColor+")", -1)
 
 		// Highlights.
-		log = strings.Replace(log, "# ", fmt.Sprintf("\033[%dm", Gray), -1)
+		log = strings.Replace(log, "# ", fmt.Sprintf("\033[%dm", Cyan), -1)
 		log = strings.Replace(log, " #", EndColor, -1)
 
 		log = clog + log
@@ -101,13 +104,15 @@ func getColorLevel(level string) string {
 	case INFO:
 		return fmt.Sprintf("\033[%dm%s\033[0m", Blue, level)
 	case TRAC:
-		return fmt.Sprintf("\033[%dm%s\033[0m", Blue, level)
+		return fmt.Sprintf("\033[%dm%s\033[0m", Cyan, level)
 	case ERRO:
 		return fmt.Sprintf("\033[%dm%s\033[0m", Red, level)
 	case WARN:
 		return fmt.Sprintf("\033[%dm%s\033[0m", Magenta, level)
 	case SUCC:
 		return fmt.Sprintf("\033[%dm%s\033[0m", Green, level)
+	case SKIP:
+		return fmt.Sprintf("\033[%dm%s\033[0m", Yellow, level)
 	default:
 		return level
 	}
