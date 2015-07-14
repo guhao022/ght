@@ -11,9 +11,6 @@ import (
 	"runtime"
 	"fmt"
 	"flag"
-	"net/http"
-	"net/url"
-	"io/ioutil"
 )
 
 var watchExts = []string{".go", ".php"}
@@ -39,13 +36,6 @@ type watch struct {
 	appName   string    // 输出的程序文件
 	appCmd    *exec.Cmd // appName的命令行包装引用，方便结束其进程。
 	goCmdArgs []string  // 传递给go build的参数
-
-	//测试api相关
-	server string
-	uri    string
-	param  string
-	method string
-	resp   *http.Response
 }
 
 func Run(){
@@ -277,35 +267,3 @@ func recursivePath(recursive bool, paths []string) []string {
 	return ret
 }
 
-
-
-func (w *watch) resultforserver(wr http.ResponseWriter, re *http.Request) {
-	// 解析参数, 默认是不会解析的
-	re.ParseForm()
-
-	w.uri = re.URL.Path
-	w.method = re.Method
-	w.param = re.Form.Encode()
-
-	u, _ := url.Parse("http://" + w.server + w.uri)
-
-	fmt.Printf("\n=================================%d===================================\n", total)
-	utils.ColorLog("[SUCC] 地址: [ %s ] \n", u)
-	utils.ColorLog("[SUCC] 参数: [ %s ] \n", w.param)
-	total++
-
-	switch w.method {
-	case "GET":
-		w.resp, _ = http.Get(u.String())
-	case "POST":
-		w.resp, _ = http.Post(u.String(), "application/x-www-form-urlencoded", strings.NewReader(w.param))
-	default:
-		http.Error(wr, http.StatusText(500), 500)
-	}
-	defer w.resp.Body.Close()
-	body, _ := ioutil.ReadAll(w.resp.Body)
-
-	// 这个写入到wr的信息是输出到客户端的
-	fmt.Fprintf(wr, string(body))
-	utils.ColorLog("[SUCC] 返回: [ %s ] \n", string(body))
-}
