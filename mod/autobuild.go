@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"fmt"
 	"flag"
+	"net/http"
+	"net/url"
+	"io/ioutil"
 )
 
 var watchExts = []string{".go", ".php"}
@@ -23,10 +26,12 @@ var (
 
 const usage = `
 
- Options:
+ Usage:
   	-h    显示当前帮助信息；
   	-o    执行编译后的可执行文件名；
   	-r    是否搜索子目录，默认为true；
+  	-b    是否编译项目，默认为true；
+  	-t    是否自动测试指定api，默认为false；
 `
 type watch struct {
 
@@ -35,6 +40,12 @@ type watch struct {
 	appCmd    *exec.Cmd // appName的命令行包装引用，方便结束其进程。
 	goCmdArgs []string  // 传递给go build的参数
 
+	//测试api相关
+	server string
+	uri    string
+	param  string
+	method string
+	resp   *http.Response
 }
 
 func Run(){
@@ -57,8 +68,6 @@ func Run(){
 		return
 	}
 
-	// 初始化builder实例想着的内容。
-
 	wd, err := os.Getwd()
 	if err != nil {
 		utils.ColorLog("[ERRO] 获取当前工作目录时，发生错误: [ %s ] \n", err)
@@ -75,7 +84,6 @@ func Run(){
 
 	w.watcher(recursivePath(recursive, append(flag.Args(), wd)))
 
-	fmt.Println(w.appName)
 	go w.build()
 
 	done := make(chan bool)
@@ -93,32 +101,31 @@ func (w *watch) watcher(paths []string) {
 	}
 
 	go func() {
-		var buildTime int64
 		for {
 			select {
 			case event := <-watcher.Events:
-				isbuild := false
+				build := true
 				if !w.checkIfWatchExt(event.Name) {
 					continue
 				}
 				if event.Op&fsnotify.Chmod == fsnotify.Chmod {
-					utils.ColorLog("[SKIP] # %s # \n", event)
+					utils.ColorLog("[SKIP] [ %s ] \n", event)
 					continue
 				}
 
 				mt := w.getFileModTime(event.Name)
 				if t := eventTime[event.Name]; mt == t {
-					utils.ColorLog("[SKIP] # %s #\n", event.String())
-					continue
+					utils.ColorLog("[SKIP] [ %s ] \n", event.String())
+					build = false
 				}
 
 				eventTime[event.Name] = mt
 
-				if(strings.HasSuffix(event.Name, ".go")){
-					isbuild = true
-				}
+				/*if(strings.HasSuffix(event.Name, ".go")){
+					build = true
+				}*/
 
-				if isbuild {
+				if build {
 					go func() {
 						scheduleTime = time.Now().Add(1 * time.Second)
 						for {
@@ -128,7 +135,6 @@ func (w *watch) watcher(paths []string) {
 							}
 							return
 						}
-						buildTime = time.Now().Unix()
 						utils.ColorLog("[TRAC] 触发编译事件: # %s # \n", event)
 						w.build()
 					}()
@@ -269,4 +275,37 @@ func recursivePath(recursive bool, paths []string) []string {
 	}
 
 	return ret
+}
+
+
+
+func (w *watch) resultforserver(wr http.ResponseWriter, re *http.Request) {
+	// 解析参数, 默认是不会解析的
+	re.ParseForm()
+
+	w.uri = re.URL.Path
+	w.method = re.Method
+	w.param = re.Form.Encode()
+
+	u, _ := url.Parse("http://" + w.server + w.uri)
+
+	fmt.Printf("\n=================================%d===================================\n", total)
+	utils.ColorLog("[SUCC] 地址: [ %s ] \n", u)
+	utils.ColorLog("[SUCC] 参数: [ %s ] \n", w.param)
+	total++
+
+	switch w.method {
+	case "GET":
+		w.resp, _ = http.Get(u.String())
+	case "POST":
+		w.resp, _ = http.Post(u.String(), "application/x-www-form-urlencoded", strings.NewReader(w.param))
+	default:
+		http.Error(wr, http.StatusText(500), 500)
+	}
+	defer w.resp.Body.Close()
+	body, _ := ioutil.ReadAll(w.resp.Body)
+
+	// 这个写入到wr的信息是输出到客户端的
+	fmt.Fprintf(wr, string(body))
+	utils.ColorLog("[SUCC] 返回: [ %s ] \n", string(body))
 }
