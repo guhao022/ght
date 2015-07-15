@@ -27,8 +27,6 @@ const usage = `
   	-h    显示当前帮助信息；
   	-o    执行编译后的可执行文件名；
   	-r    是否搜索子目录，默认为true；
-  	-b    是否编译项目，默认为true；
-  	-t    是否自动测试指定api，默认为false；
 `
 type watch struct {
 
@@ -125,7 +123,7 @@ func (w *watch) watcher(paths []string) {
 							}
 							return
 						}
-						utils.ColorLog("[TRAC] 触发编译事件: # %s # \n", event)
+						utils.ColorLog("[TRAC] 触发编译事件: < %s > \n", event)
 						w.build()
 					}()
 				}
@@ -172,14 +170,14 @@ func (w *watch) restart() {
 	}()
 
 	if w.appCmd != nil && w.appCmd.Process != nil {
-		utils.ColorLog("[INFO] 进程终止... \n")
+		utils.ColorLog("[INFO] 终止旧进程... \n")
 		if err := w.appCmd.Process.Kill(); err != nil {
 			utils.ColorLog("[ERROR] 终止进程失败 [ %s ] ...\n", err)
 		}
 		utils.ColorLog("[SUCC] 旧进程被终止! \n")
 	}
 
-	utils.ColorLog("[INFO] 重启 # %s # \n", w.appName)
+	utils.ColorLog("[INFO] 重启 < %s > \n", w.appName)
 	if strings.Index(w.appName, "./") == -1 {
 		w.appName = "./" + w.appName
 	}
